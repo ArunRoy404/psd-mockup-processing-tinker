@@ -504,11 +504,12 @@ def apply_blend_mode(background: Image.Image, foreground: Image.Image, mode_str:
 # ==========================================================================
 # Multi-Layer Mockup Orchestrator
 # ==========================================================================
-def render_full_mockup(psd, replacement_map, fit_mode="fill", use_mask=True,
+def render_full_mockup(psd, replacement_input, fit_mode="fill", use_mask=True,
                         progress_callback=None):
     """
     Renders the full PSD layer tree in proper z-order.
-    replacement_map: dict mapping layer_name -> Image.Image (or image path)
+    replacement_input: Can be a single design image (str or Image.Image) applied to ALL
+                       smart objects, or a dict mapping layer_name -> image.
     """
     canvas_w, canvas_h = psd.width, psd.height
     accumulated_canvas = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
@@ -517,6 +518,14 @@ def render_full_mockup(psd, replacement_map, fit_mode="fill", use_mask=True,
     total_layers = len(flat_layers)
 
     last_base_alpha = None
+
+    # Handle replacement input format (single image or dict)
+    if isinstance(replacement_input, dict):
+        replacement_map = replacement_input
+        default_design = replacement_input.get("__default__")
+    else:
+        replacement_map = {}
+        default_design = replacement_input
 
     for idx, layer in enumerate(flat_layers):
         if not getattr(layer, "visible", True):
@@ -532,7 +541,7 @@ def render_full_mockup(psd, replacement_map, fit_mode="fill", use_mask=True,
 
         # Check if layer is a smart object with a replacement image assigned
         is_so = getattr(layer, "kind", None) == "smartobject"
-        design_img = replacement_map.get(layer_name) if is_so else None
+        design_img = replacement_map.get(layer_name, default_design) if is_so else None
 
         if is_so and design_img is not None:
             # 1. Warp user replacement design
@@ -596,8 +605,7 @@ class MockupApp:
         self.psd = None
         self.psd_path = None
         self.smart_layers = []
-        self.replacement_map = {}  # layer_name -> filepath
-        self.layer_ui_rows = {}
+        self.design_image_path = None
         self.preview_photo = None
 
         self.setup_ui()
@@ -629,13 +637,20 @@ class MockupApp:
         self.mask_var = tk.BooleanVar(value=True)
         tk.Checkbutton(opt_frame, text="Apply Layer Raster Masks", variable=self.mask_var, bg="#f3f4f6").grid(row=0, column=2, padx=20, sticky="w")
 
-        # Smart Object Layer Mapping Container
-        self.so_container = tk.LabelFrame(main_frame, text=" 3. Smart Object Replacement Mapping ", font=("Arial", 11, "bold"), bg="#f3f4f6", padx=10, pady=10)
+        # Design Image Selection Container
+        self.so_container = tk.LabelFrame(main_frame, text=" 3. Replacement Design Image ", font=("Arial", 11, "bold"), bg="#f3f4f6", padx=10, pady=10)
         self.so_container.pack(fill="x", pady=5)
         
-        self.so_list_frame = tk.Frame(self.so_container, bg="#f3f4f6")
-        self.so_list_frame.pack(fill="x")
-        tk.Label(self.so_list_frame, text="Load a PSD to view smart object layers.", fg="#6b7280", bg="#f3f4f6").pack()
+        row = tk.Frame(self.so_container, bg="#f3f4f6")
+        row.pack(fill="x", pady=2)
+
+        tk.Label(row, text="Design Image:", font=("Arial", 10, "bold"), bg="#f3f4f6").grid(row=0, column=0, sticky="w")
+        tk.Button(row, text="Select Design Image...", command=self.select_design_image, bg="#4f46e5", fg="white", font=("Arial", 9, "bold")).grid(row=0, column=1, padx=10)
+        self.design_status_lbl = tk.Label(row, text="No design image selected", fg="#ef4444", bg="#f3f4f6", font=("Arial", 10))
+        self.design_status_lbl.grid(row=0, column=2, sticky="w")
+
+        self.so_info_lbl = tk.Label(self.so_container, text="Target Smart Objects: Load a PSD to view detected layers.", fg="#6b7280", bg="#f3f4f6", font=("Arial", 9))
+        self.so_info_lbl.pack(anchor="w", pady=(5, 0))
 
         # Progress Section
         self.progress_var = tk.DoubleVar()
@@ -668,53 +683,30 @@ class MockupApp:
             if not self.smart_layers:
                 messagebox.showwarning("Warning", "No Smart Object layers detected in this PSD file.")
                 self.psd_status.config(text="Loaded (0 Smart Objects)", fg="#b45309")
+                self.so_info_lbl.config(text="Target Smart Objects: None found in this PSD.", fg="#b45309")
             else:
+                so_names = ", ".join([f"'{l.name}'" for l in self.smart_layers])
                 self.psd_status.config(text=f"Loaded: {os.path.basename(path)} ({len(self.smart_layers)} Smart Objects)", fg="#15803d")
+                self.so_info_lbl.config(text=f"Design will be placed into {len(self.smart_layers)} Smart Object layer(s): {so_names}", fg="#374151")
 
-            self.populate_smart_objects_ui()
             self.update_preview(self.psd.composite())
 
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load PSD file:\n{e}")
 
-    def populate_smart_objects_ui(self):
-        for widget in self.so_list_frame.winfo_children():
-            widget.destroy()
-
-        self.replacement_map.clear()
-        self.layer_ui_rows.clear()
-
-        if not self.smart_layers:
-            tk.Label(self.so_list_frame, text="No Smart Object layers found in this PSD.", bg="#f3f4f6", fg="#6b7280").pack()
-            return
-
-        for idx, layer in enumerate(self.smart_layers):
-            row = tk.Frame(self.so_list_frame, bg="#f3f4f6")
-            row.pack(fill="x", pady=2)
-
-            tk.Label(row, text=f"Layer: '{layer.name}'", width=25, anchor="w", font=("Arial", 9, "bold"), bg="#f3f4f6").grid(row=0, column=0)
-            
-            btn = tk.Button(row, text="Select Image...", command=lambda l_name=layer.name: self.select_replacement_image(l_name), width=15)
-            btn.grid(row=0, column=1, padx=5)
-
-            status_lbl = tk.Label(row, text="No image selected (Default content)", fg="#6b7280", bg="#f3f4f6", width=45, anchor="w")
-            status_lbl.grid(row=0, column=2, padx=5)
-
-            self.layer_ui_rows[layer.name] = status_lbl
-
-    def select_replacement_image(self, layer_name):
+    def select_design_image(self):
         path = filedialog.askopenfilename(filetypes=[("Image Files", "*.png *.jpg *.jpeg *.bmp *.webp *.tif *.tiff")])
         if path:
-            self.replacement_map[layer_name] = path
-            self.layer_ui_rows[layer_name].config(text=os.path.basename(path), fg="#15803d")
+            self.design_image_path = path
+            self.design_status_lbl.config(text=os.path.basename(path), fg="#15803d")
 
     def process(self):
         if not self.psd:
             messagebox.showerror("Error", "Please load a PSD file first.")
             return
 
-        if not any(self.replacement_map.values()):
-            messagebox.showwarning("Warning", "Please select at least one replacement image for a Smart Object layer.")
+        if not self.design_image_path:
+            messagebox.showwarning("Warning", "Please select a design image first.")
             return
 
         def update_progress(current, total, layer_name):
@@ -728,7 +720,7 @@ class MockupApp:
             self.progress_label.config(text="Starting mockup generation...")
             self.root.update_idletasks()
 
-            final_img = render_full_mockup(self.psd, self.replacement_map,
+            final_img = render_full_mockup(self.psd, self.design_image_path,
                                            fit_mode=self.fit_var.get(),
                                            use_mask=self.mask_var.get(),
                                            progress_callback=update_progress)

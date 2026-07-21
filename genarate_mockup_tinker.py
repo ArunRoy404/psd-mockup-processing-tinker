@@ -689,6 +689,10 @@ class MockupApp:
                 self.psd_status.config(text=f"Loaded: {os.path.basename(path)} ({len(self.smart_layers)} Smart Objects)", fg="#15803d")
                 self.so_info_lbl.config(text=f"Design will be placed into {len(self.smart_layers)} Smart Object layer(s): {so_names}", fg="#374151")
 
+            # Retain previously selected design image across PSD file loads
+            if self.design_image_path and os.path.exists(self.design_image_path):
+                self.design_status_lbl.config(text=os.path.basename(self.design_image_path), fg="#15803d")
+
             self.update_preview(self.psd.composite())
 
         except Exception as e:

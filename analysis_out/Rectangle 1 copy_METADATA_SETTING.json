@@ -1,0 +1,23 @@
+{
+  "__type__": "MetadataSettings",
+  "_items": [
+    {
+      "__type__": "MetadataSetting",
+      "signature": "8BIM",
+      "key": "cust",
+      "copy_on_sheet": false,
+      "data": {
+        "__type__": "DescriptorBlock",
+        "_items": {
+          "layerTime": {
+            "__type__": "Double",
+            "value": 1777968560.9810164
+          }
+        },
+        "name": "\u0000",
+        "classID": "metadata",
+        "version": 16
+      }
+    }
+  ]
+}

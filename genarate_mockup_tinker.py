@@ -538,6 +538,7 @@ def render_full_mockup(psd, replacement_input, fit_mode="fill", use_mask=True,
         is_clipped = getattr(layer, "clipping", False)
         blend_mode = str(layer.blend_mode)
         opacity = layer.opacity / 255.0 if layer.opacity > 1 else layer.opacity
+        eff_opacity = opacity
 
         # Check if layer is a smart object with a replacement image assigned
         is_so = getattr(layer, "kind", None) == "smartobject"
@@ -564,19 +565,33 @@ def render_full_mockup(psd, replacement_input, fit_mode="fill", use_mask=True,
                     layer_rendered = Image.fromarray(arr, mode="RGBA")
 
         else:
-            # Render standard PSD layer content
+            # Render standard PSD layer content (overlays, shadows, background, etc.)
+            layer_rendered = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
+            bbox = layer.bbox
             try:
-                psd_comp = layer.composite()
-                if psd_comp is not None:
-                    layer_rendered = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
-                    bbox = layer.bbox
-                    if bbox and (bbox[2] > bbox[0]) and (bbox[3] > bbox[1]):
-                        mask = psd_comp if psd_comp.mode == "RGBA" else None
-                        layer_rendered.paste(psd_comp, (bbox[0], bbox[1]), mask)
+                topil_img = layer.topil()
+                if topil_img is not None and bbox and (bbox[2] > bbox[0]) and (bbox[3] > bbox[1]):
+                    if topil_img.mode != "RGBA":
+                        topil_img = topil_img.convert("RGBA")
+                    layer_rendered.paste(topil_img, (bbox[0], bbox[1]), topil_img)
+                    eff_opacity = opacity  # Raw alpha from topil needs layer opacity applied
                 else:
-                    layer_rendered = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
+                    psd_comp = layer.composite()
+                    if psd_comp is not None and bbox and (bbox[2] > bbox[0]) and (bbox[3] > bbox[1]):
+                        if psd_comp.mode != "RGBA":
+                            psd_comp = psd_comp.convert("RGBA")
+                        layer_rendered.paste(psd_comp, (bbox[0], bbox[1]), psd_comp)
+                        eff_opacity = 1.0  # Opacity already baked into composite alpha
             except Exception:
-                layer_rendered = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
+                try:
+                    psd_comp = layer.composite()
+                    if psd_comp is not None and bbox and (bbox[2] > bbox[0]) and (bbox[3] > bbox[1]):
+                        if psd_comp.mode != "RGBA":
+                            psd_comp = psd_comp.convert("RGBA")
+                        layer_rendered.paste(psd_comp, (bbox[0], bbox[1]), psd_comp)
+                        eff_opacity = 1.0
+                except Exception:
+                    pass
 
         # Handle stencil clipping mask
         if is_clipped and last_base_alpha is not None:
@@ -586,8 +601,8 @@ def render_full_mockup(psd, replacement_input, fit_mode="fill", use_mask=True,
         elif not is_clipped:
             last_base_alpha = layer_rendered.getchannel("A")
 
-        # Blend layer into master accumulated canvas
-        accumulated_canvas = apply_blend_mode(accumulated_canvas, layer_rendered, blend_mode, opacity)
+        # Blend layer into master accumulated canvas in strict z-order
+        accumulated_canvas = apply_blend_mode(accumulated_canvas, layer_rendered, blend_mode, eff_opacity)
 
     return accumulated_canvas.convert("RGB")
 
